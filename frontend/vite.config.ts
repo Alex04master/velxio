@@ -70,6 +70,10 @@ export default defineConfig(({ command }) => ({
     preserveSymlinks: !!process.env.VITE_PRO_BUILD,
   },
   server: {
+    // Класс открывает СДО по имени компьютера (не только по IP);
+    // без этого vite 7 отвечал 403 на Host: <имя-пк> и iframe
+    // симулятора «крашился» после загрузки (задания МДК).
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8001',

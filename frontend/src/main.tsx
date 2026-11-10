@@ -10,6 +10,12 @@ import './i18n';
 import { initTheme } from './lib/theme';
 import { markProExamplesSettled } from './data/examples';
 import { markProRoutesSettled } from './lib/proRoutes';
+// works-core bridge: снимок проекта для кнопки импорта схемы в СДО.
+import { buildVlxPayload } from './utils/vlxFile';
+import { flushChipFileSync } from './services/chipFiles';
+import { workspaceHasWork } from './utils/workspaceDraft';
+import { useSimulatorStore } from './store/useSimulatorStore';
+import type { BoardInstance } from './types/board';
 
 /** The overlay import has settled (either way): registries are final. */
 const markProOverlaySettled = (): void => {
@@ -142,3 +148,95 @@ if (import.meta.env.DEV) {
     };
   });
 }
+
+// ── works-core bridge ──────────────────────────────────────────────────
+// СДО (works-core) встраивает редактор в <iframe> на странице задания.
+// Каналы (простые JSON-сообщения, postMessage с '*'):
+//   parent → here: {wc:'velxio-export', id} — снять снимок проекта для
+//               кнопки «Импортировать схему в отчёт»; ответ
+//               {wc:'velxio-export-data', id, payload, error};
+//   here → parent: {wc:'velxio-ready'} — редактор загрузился; СДО отвечает
+//               {wc:'velxio-task', task: '<id задания>'};
+//   parent → here: {wc:'velxio-task', task} — привязать черновик к заданию.
+// Черновик: пока редактор открыт внутри СДО, работа студента (вся .vlx-
+// сериализация) пишется в localStorage с ключом по id задания и
+// восстанавливается при загрузке — иначе отправка формы (перезагрузка
+// страницы СДО) стирала бы всё собранное: OSS-сборка держит проект только
+// в памяти. Вне iframe (открыто вкладкой) черновики не пишутся.
+let wcTaskId = '';
+const wcDraftKey = (): string => 'velxio_ws_draft_' + wcTaskId;
+
+function wcSaveDraft(): void {
+  if (!wcTaskId) return;
+  try {
+    // Файлы чипов синхронизируются с дебаунсом — сбросим перед снимком.
+    flushChipFileSync();
+    localStorage.setItem(wcDraftKey(), JSON.stringify(buildVlxPayload()));
+  } catch {
+    // переполнение/запрет хранилища — теряем черновик, но не падаем
+  }
+}
+
+function wcTryRestore(): void {
+  if (!wcTaskId) return;
+  try {
+    const raw = localStorage.getItem(wcDraftKey());
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    useSimulatorStore.getState().loadProjectState({
+      boards: payload.boards as unknown as BoardInstance[],
+      fileGroups: payload.fileGroups,
+      folderGroups: payload.folderGroups,
+      components: payload.components,
+      wires: payload.wires,
+      activeBoardId: payload.activeBoardId,
+    });
+  } catch {
+    // битый черновик — начинаем с чистого стартера
+  }
+}
+
+window.addEventListener('message', (ev: MessageEvent) => {
+  const data = ev.data as
+    | { wc?: string; id?: string | number; task?: string | number }
+    | null;
+  if (!data || typeof data.wc !== 'string') return;
+  if (data.wc === 'velxio-export') {
+    let payload: unknown = null;
+    let error = '';
+    try {
+      flushChipFileSync();
+      payload = buildVlxPayload();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+    const reply = { wc: 'velxio-export-data', id: data.id ?? '', payload, error };
+    (window.parent !== window ? window.parent : window).postMessage(reply, '*');
+    return;
+  }
+  if (data.wc === 'velxio-task' && data.task) {
+    wcTaskId = String(data.task);
+    // Стартер/пример грузится асинхронно и перезаписал бы черновик —
+    // поэтому восстановление с повторами: как только в рабочей области
+    // появляется «работа» (восстановленный черновик или правки студента),
+    // цикл прекращается (workspaceHasWork).
+    for (const delay of [1500, 3000, 5000, 8000]) {
+      window.setTimeout(() => {
+        if (wcTaskId !== String(data.task)) return;
+        if (workspaceHasWork()) return;
+        wcTryRestore();
+      }, delay);
+    }
+  }
+});
+
+// Сообщаем родителю, что мост жив — СДО ответит id задания для черновика.
+try {
+  if (window.parent !== window) {
+    window.parent.postMessage({ wc: 'velxio-ready' }, '*');
+  }
+} catch {
+  /* не в iframe */
+}
+window.addEventListener('pagehide', () => wcSaveDraft());
+window.setInterval(() => wcSaveDraft(), 3000);

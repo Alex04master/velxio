@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Диагностика симулятора</title></head>
+<body style="font-family:monospace;font-size:14px;background:#111;color:#ddd;padding:16px;max-width:900px">
+<h2 style="color:#7ec7ff;margin:0 0 10px">🔧 Диагностика симулятора (для доски)</h2>
+<div id="log">запуск…</div>
+<script>
+var log = document.getElementById('log');
+function L(m, bad){
+  var d = document.createElement('div');
+  d.style.margin = '2px 0';
+  d.style.color = bad ? '#ff7a7a' : '#9fe3a0';
+  d.textContent = m;
+  log.appendChild(d);
+}
+L('браузер: ' + navigator.userAgent);
+L('ядер CPU: ' + (navigator.hardwareConcurrency || '?') +
+  ' | память (примерно): ' + (navigator.deviceMemory ?
+  navigator.deviceMemory + ' ГБ' : 'не сообщает'));
+
+// 1) WebAssembly компилируется?
+try {
+  var ok = WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0]));
+  L('WebAssembly: ' + (ok ? 'поддерживается' : 'НЕ РАБОТАЕТ (!)', !ok), !ok);
+} catch(e){ L('WebAssembly: ОШИБКА ' + e, true); }
+
+// 2) тест памяти: выделить 400 МБ
+setTimeout(function(){
+  try {
+    var chunks = [];
+    for (var i = 0; i < 40; i++) chunks.push(new Uint8Array(10 * 1024 * 1024));
+    L('тест памяти: 400 МБ удержано — живы');
+    chunks = null;
+  } catch(e){ L('тест памяти: УПАЛ на ' + (i*10) + ' МБ: ' + e, true); }
+
+  // 3) настоящий воркер ngspice (как в симуляторе)
+  var t0 = performance.now();
+  try {
+    var w = new Worker('/src/simulation/spice/wasm/ngspice-interactive-worker.js');
+    w.onerror = function(e){ L('воркер ngspice: ОШИБКА ' + e.message, true); };
+    w.onmessage = function(e){
+      if ((e.data||{}).type === 'ready'){
+        L('воркер ngspice: ГОТОВ за ' + ((performance.now()-t0)/1000).toFixed(1) + ' с');
+        L('=== ИТОГ: всё зелёное = вкладка не должна падать;' +
+          ' если страница вдруг «упала» до этой строки — виновата память/GPU ===');
+      }
+    };
+    w.postMessage({ type: 'init', requestId: 1,
+                    config: { assetBaseUrl: '/wasm/ngspice-interactive/' } });
+    setTimeout(function(){
+      if (!log.textContent.match(/ГОТОВ/))
+        L('воркер ngspice: не ответил за 90 с (висит)', true);
+    }, 90000);
+  } catch(e){ L('воркер ngspice: не создан: ' + e, true); }
+}, 500);
+</script>
+</body>
+</html>

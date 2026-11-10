@@ -248,12 +248,17 @@ class ArduinoCLIService:
     # Board manager URLs for cores that aren't built-in
     CORE_URLS: dict[str, str] = {
         "rp2040:rp2040": "https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json",
-        "esp32:esp32": "https://espressif.github.io/arduino-esp32/package_esp32_index.json",
+        # "esp32:esp32": "https://espressif.github.io/arduino-esp32/package_esp32_index.json",
+        #   ^ disabled (local deployment): ESP-IDF/QEMU toolchain not installed;
+        #     Uno-only usage. Re-enable when ESP32 compilation is needed.
         # Spence Konde's ATTinyCore — needed for ATtiny85 FQBNs like
         #   ATTinyCore:avr:attinyx5:chip=85,clock=internal16mhz
         # Without it arduino-cli reports
         #   "Platform 'ATTinyCore:avr' not found: platform not installed".
-        "ATTinyCore:avr": "http://drazzy.com/package_drazzy.com_index.json",
+        # "ATTinyCore:avr": "http://drazzy.com/package_drazzy.com_index.json",
+        #   ^ disabled (local deployment): drazzy.com is unreachable from this
+        #     network and hangs `core update-index` forever (0 B download loop).
+        #     Uno-only usage. Re-enable only with a working route to drazzy.com.
     }
 
     # Cores to auto-install on startup
@@ -308,7 +313,8 @@ class ArduinoCLIService:
             # Ensure config file exists (arduino-cli requires it for config add)
             result = subprocess.run(
                 [self.cli_path, "config", "dump", "--format", "json"],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30,
+                encoding='utf-8', errors='replace'
             )
             import json
             try:
@@ -322,13 +328,15 @@ class ArduinoCLIService:
                 print("[arduino-cli] Initializing config file...")
                 subprocess.run(
                     [self.cli_path, "config", "init", "--overwrite"],
-                    capture_output=True, text=True
+                    capture_output=True, text=True, timeout=30,
+                    encoding='utf-8', errors='replace'
                 )
 
             # Re-read after init
             result = subprocess.run(
                 [self.cli_path, "config", "dump", "--format", "json"],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30,
+                encoding='utf-8', errors='replace'
             )
             try:
                 cfg = json.loads(result.stdout)
@@ -351,14 +359,16 @@ class ArduinoCLIService:
                     print(f"[arduino-cli] Adding board manager URL: {url}")
                     subprocess.run(
                         [self.cli_path, "config", "add", "board_manager.additional_urls", url],
-                        capture_output=True, text=True
+                        capture_output=True, text=True, timeout=45,
+                        encoding='utf-8', errors='replace'
                     )
 
             # Refresh index so new cores are discoverable
             print("[arduino-cli] Updating core index...")
             subprocess.run(
                 [self.cli_path, "core", "update-index"],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=90,
+                encoding='utf-8', errors='replace'
             )
             self._registered_urls = existing | wanted
         except Exception as e:
@@ -373,7 +383,7 @@ class ArduinoCLIService:
             result = subprocess.run(
                 [self.cli_path, "core", "list"],
                 capture_output=True,
-                text=True
+                text=True, timeout=45, encoding='utf-8', errors='replace'
             )
 
             for core_id in self.REQUIRED_CORES:
@@ -381,7 +391,7 @@ class ArduinoCLIService:
                     print(f"[arduino-cli] Core {core_id} not installed. Installing...")
                     subprocess.run(
                         [self.cli_path, "core", "install", core_id],
-                        check=True
+                        check=True, timeout=900
                     )
                     print(f"[arduino-cli] Core {core_id} installed successfully")
         except Exception as e:
